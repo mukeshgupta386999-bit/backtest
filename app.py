@@ -10,18 +10,15 @@ import requests
 # ============================================================
 # DELTA INDIA TESTNET CONFIG
 # ============================================================
-# Environment variables se lo (hardcode mat karo)
 API_KEY    = os.getenv("DELTA_API_KEY", "M3QCY7ccOy1EJcQuzwKk7nh5dOCEpi")
 API_SECRET = os.getenv("DELTA_API_SECRET", "5FZrF4yBOzwUk2hdPiZpc95Krz8dQzdarTTGwGQsNeFXPMdEiJ4hFKrhLAdo")
 
-# ✅ DELTA INDIA TESTNET URL
 BASE_URL = "https://cdn-ind.testnet.deltaex.org"
 
 # ============================================================
 # DELTA API SIGNED REQUEST
 # ============================================================
 def delta_request(method, path, body=None):
-    """Delta India API ko signed request bhejo"""
     if body is None:
         body = ""
     elif isinstance(body, dict):
@@ -70,7 +67,6 @@ def process_order(data):
         side = str(data.get('side', '')).lower()
         action = str(data.get('action', '')).lower()
 
-        # Exit signal handle karo
         if 'exit' in side or 'close' in side or 'exit' in action or 'close' in action:
             print("Exit signal mila — positions close kar rahe hain...")
             positions = delta_request('GET', '/v2/positions/margined')
@@ -89,14 +85,13 @@ def process_order(data):
                         print(f"Close order: {res}")
             return
 
-        # Normal entry
         raw_size = float(data.get('size', 1))
         size = int(raw_size) if raw_size >= 1 else 1
 
         order_body = {
             "product_symbol": "BTCUSD",
             "size": size,
-            "side": side,          # 'buy' ya 'sell'
+            "side": side,
             "order_type": "market_order"
         }
 
@@ -112,37 +107,51 @@ def process_order(data):
 # WEBHOOK SERVER
 # ============================================================
 class WebhookHandler(http.server.BaseHTTPRequestHandler):
+
+    def _send(self, code, payload):
+        self.send_response(code)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode())
+
+    # ✅ GET route — Render health check ke liye
+    def do_GET(self):
+        if self.path in ('/', '/health', '/healthz'):
+            self._send(200, {"status": "ok", "service": "tradingview-delta-webhook"})
+        else:
+            self._send(404, {"status": "not found"})
+
+    def do_HEAD(self):
+        self._send(200, {"status": "ok"})
+
     def do_POST(self):
         if self.path == '/webhook':
             try:
-                length = int(self.headers['Content-Length'])
+                length = int(self.headers.get('Content-Length', 0))
                 post_data = self.rfile.read(length)
                 data = json.loads(post_data.decode('utf-8'))
                 print("TradingView se data mila:", data)
 
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self._send(200, {"status": "success"})
 
-                threading.Thread(target=process_order, args=(data,)).start()
+                threading.Thread(target=process_order, args=(data,), daemon=True).start()
             except Exception as e:
                 print("Server Error:", str(e))
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode())
+                self._send(200, {"status": "error", "message": str(e)})
         else:
-            self.send_response(404)
-            self.end_headers()
+            self._send(404, {"status": "not found"})
 
     def log_message(self, format, *args):
-        pass  # default HTTP log band karo
+        pass
 
 
+# ============================================================
+# ✅ RENDER PORT FIX
+# ============================================================
 if __name__ == '__main__':
-    server_address = ('0.0.0.0', 5000)
+    port = int(os.getenv("PORT", 5000))
+    server_address = ('0.0.0.0', port)
     httpd = http.server.HTTPServer(server_address, WebhookHandler)
-    print("Webhook Server http://localhost:5000 par chal raha hai...")
+    print(f"Webhook Server {port} par chal raha hai...")
     print(f"Delta Base URL: {BASE_URL}")
     httpd.serve_forever()
